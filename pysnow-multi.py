@@ -1,25 +1,18 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-import pandas as pd
-import datetime as dt
-import snowflake.connector
-
-from sqlalchemy import create_engine
-from snowflake.sqlalchemy import URL
-from sqlalchemy.dialects import registry
-from sqlalchemy import event
-
 # CRED_FILE = "snowflake_credentials.py"
 from snowflake_credentials import creds
 
-import bz2
 import os
 import time
-import threading
-import snowflake as sf
-import zipfile as zf
 import math
+import threading
+
+import pandas as pd
+import zipfile as zf
+import datetime as dt
+import snowflake.connector
 
 
 class SnowConnector():
@@ -36,7 +29,7 @@ class SnowConnector():
             self.rows_to_read = 1000000
             self.field_delimiter = ','
             self.field_delimiter = '\n'
-            self.file_within_zip = ''
+            self.filename_in_zip = ''
             self.rm_staging_folder = True
             self.rm_staging_folder = True
             
@@ -52,7 +45,7 @@ class SnowConnector():
                 temp_filename = temp_filename.replace(' ', '_').replace('.', '_')
                 self.snow_table = ''.join(s for s in temp_filename if (s.isalnum() or s == '_'))
             else:
-                now = dt.datetime.now()
+                now = str(dt.datetime.now())
                 self.snow_table = 'python_upload_' + now.replace(':', '-').replace('.', '-').replace(' ', '-')
             
             if '.zip' in self.infile:
@@ -101,6 +94,7 @@ class SnowConnector():
             print(e, '\nPlease check the credential file for missing information')
 
     def print_conn_info(self):
+        print()
         print('USER:', self.user)
         print('ACCOUNT:', self.account)
         print('WAREHOUSE:', self.warehouse)
@@ -140,7 +134,8 @@ class SnowConnector():
 
     def get_rm_staging_files(self):
         return self.rm_staging_files
-    
+
+    # TODO: error handling when connection fails after 5 attempts
     def snowflake_cursor(self):
         e_counter = 0
 
@@ -165,7 +160,6 @@ class SnowConnector():
         return conn
         
     def table_exists(self, conn, table=None):
-        
         if table:
             table_name = table
         else:
@@ -182,11 +176,6 @@ class SnowConnector():
         return False
         
     def create_table(self, col_names_types):
-        """
-        col_names_types = '(col1 integer, col2 string, col3 date)'
-        
-        if_exits: create_new or replace
-        """
         table_name = self.snow_table
         conn = self.snowflake_cursor()
         
@@ -211,9 +200,9 @@ class SnowConnector():
         create = "CREATE OR REPLACE TABLE " + table_name + col_names_types
         conn.cursor().execute(create)
         print(table_name, 'table created or replaced')
-        
 
-def file_col_names_types(filename, all_strings=True):    
+
+def file_col_names_types(filename, all_strings=True):
     # set all col types to string
     if all_strings:
         infile = pd.read_csv(filename, nrows=1)
@@ -243,19 +232,18 @@ def file_col_names_types(filename, all_strings=True):
     return infile_sql_types
 
 
-def file_col_names(filename):
-    infile = pd.read_csv(filename, nrows=1)
-
-    infile_col_names = "(" + ", ".join([c.replace(' ', '_').strip() for c in infile.columns]) + ")"
-
-    return infile_col_names
+# def file_col_names(filename):
+#     infile = pd.read_csv(filename, nrows=1)
+#     infile_col_names = "(" + ", ".join([c.replace(' ', '_').strip() for c in infile.columns]) + ")"
+#
+#     return infile_col_names
 
 
 class ZipToGzThread (threading.Thread):
-    def __init__(self, threadID, skip, rows_to_read, filename, header, dtypes,
+    def __init__(self, thread_id, skip, rows_to_read, filename, header, dtypes,
                  staging_folder, zipname=None):
         threading.Thread.__init__(self)
-        self.threadID = threadID
+        self.threadID = thread_id
         self.skip = skip
         self.rows_to_read = rows_to_read
         self.filename = filename
@@ -282,11 +270,11 @@ def chunk_file(skip, rows_to_read, filename, header, dtypes, threadID, staging_f
     print(f'sent thread ID {threadID} to local staging folder as GZIP')
 
 
-# credit: https://interworks.com/blog/2020/03/04/zero-to-snowflake-multi-threaded-bulk-loading-with-python/
-class sfExecutionThread (threading.Thread):
-    def __init__(self, threadID, sql_query):
+class SfExecutionThread (threading.Thread):
+    # credit: https://interworks.com/blog/2020/03/04/zero-to-snowflake-multi-threaded-bulk-loading-with-python/
+    def __init__(self, thread_id, sql_query):
         threading.Thread.__init__(self)
-        self.threadID = threadID
+        self.threadID = thread_id
         self.sql_query = sql_query
         
     def run(self):
@@ -318,8 +306,6 @@ def main():
     
     if filetype in ['zip', 'csv', 'txt']:  
         filename = snow.get_infile()
-        
-        col_names = file_col_names(filename)
         col_names_types = file_col_names_types(filename, all_strings=True)
 
         print(dt.datetime.now(), '***', 'Creating table', table_name)
@@ -420,11 +406,11 @@ def main():
         # create thread list
         print(dt.datetime.now(), '***', 'Creating thread list for PUT statements...')
         for statement in put_statements:
-            put_threads.append(sfExecutionThread(put_counter, statement))
+            put_threads.append(SfExecutionThread(put_counter, statement))
             put_counter += 1
             
         # execute the threads
-        print(dt.datetime.now(), '***', 'Starting PUT threads...')
+        print(dt.datetime.now(), '***', 'Starting PUT query threads...')
         for thread in put_threads:
             thread.start()
 
