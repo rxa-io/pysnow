@@ -10,8 +10,8 @@ from snowflake.sqlalchemy import URL
 from sqlalchemy.dialects import registry
 from sqlalchemy import event
 
-# CRED_FILE = "snowflake_credentials_jb.py"
-from snowflake_credentials_jb import creds
+# CRED_FILE = "snowflake_credentials.py"
+from snowflake_credentials import creds
 
 import bz2
 import os
