@@ -1,18 +1,18 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# CRED_FILE = "snowflake_credentials.py"
-from snowflake_credentials import creds
-
-import os
-import time
+import datetime as dt
 import math
+import os
 import threading
+import time
+import zipfile as zf
 
 import pandas as pd
-import zipfile as zf
-import datetime as dt
 import snowflake.connector
+
+# CRED_FILE = "snowflake_credentials.py"
+from snowflake_credentials import creds
 
 
 class SnowConnector():
@@ -138,6 +138,7 @@ class SnowConnector():
     # TODO: error handling when connection fails after 5 attempts
     def snowflake_cursor(self):
         e_counter = 0
+        conn = None
 
         while e_counter < 5:
             try:
@@ -153,9 +154,15 @@ class SnowConnector():
             except snowflake.connector.errors.DatabaseError as e:
                 print(e)
                 print('Connection to Snowflake refused, trying again...')
-                e_counter +=1
+                e_counter += 1
                 time.sleep(5)
-        
+        if not conn:
+            print("""\n*****\n
+                     Connection to Snowflake refused after 5 attempts. 
+                     Please check connection credentials and 
+                     connection to server/internet.
+                     \n*****\n""")
+            exit(1)
         print("Connected to Snowflake")
         return conn
         
@@ -196,6 +203,9 @@ class SnowConnector():
                 print(old_table_name, 'already exists. new table name is', table_name)
             else:
                 print(table_name, 'already exists. table will be replaced')
+                drop_rows = "DELETE FROM " + table_name
+                conn.cursor().execute(drop_rows)
+                print(table_name, 'table rows cleared and ready for upload')
 
         create = "CREATE OR REPLACE TABLE " + table_name + col_names_types
         conn.cursor().execute(create)
@@ -232,13 +242,6 @@ def file_col_names_types(filename, all_strings=True):
     return infile_sql_types
 
 
-# def file_col_names(filename):
-#     infile = pd.read_csv(filename, nrows=1)
-#     infile_col_names = "(" + ", ".join([c.replace(' ', '_').strip() for c in infile.columns]) + ")"
-#
-#     return infile_col_names
-
-
 class ZipToGzThread (threading.Thread):
     def __init__(self, thread_id, skip, rows_to_read, filename, header, dtypes,
                  staging_folder, zipname=None):
@@ -257,17 +260,17 @@ class ZipToGzThread (threading.Thread):
                    self.dtypes, self.threadID, self.staging_folder, self.zipname)
 
         
-def chunk_file(skip, rows_to_read, filename, header, dtypes, threadID, staging_filepath, zipname):
+def chunk_file(skip, rows_to_read, filename, header, dtypes, threadID, staging_filepath, zipname=None):
     if zipname:
         temp = pd.read_csv(zipname, skiprows=skip, nrows=rows_to_read, dtype=dtypes,
-                           names=header, header=None, engine ='c')
+                           names=header, header=None, engine='c')
     else:
         temp = pd.read_csv(filename, skiprows=skip, nrows=rows_to_read, dtype=dtypes,
-                           names=header, header=None, engine ='c')
-    print(f'read {len(temp)} lines starting at row {skip}')
+                           names=header, header=None, engine='c')
+    print(f'Read {len(temp)} lines starting at row {skip}')
     temp.to_csv(f'{staging_filepath}/{filename}_{threadID}.gz', index=False, header=True,
                 compression='gzip', chunksize=1000)
-    print(f'sent thread ID {threadID} to local staging folder as GZIP')
+    print(f'Sent thread ID {threadID} to local staging folder as GZIP')
 
 
 class SfExecutionThread (threading.Thread):
@@ -289,7 +292,8 @@ def execute_in_snowflake(sf_query):
     conn = temp_snow.snowflake_cursor()        
 
     # increase timeout
-    conn.cursor().execute('ALTER SESSION SET STATEMENT_TIMEOUT_IN_SECONDS = 86400')
+    conn.cursor().execute("""ALTER SESSION SET 
+                             STATEMENT_TIMEOUT_IN_SECONDS = 86400""")
 
     conn.cursor().execute(sf_query)
     conn.close()
